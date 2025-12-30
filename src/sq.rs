@@ -1,0 +1,153 @@
+use core::sync::atomic::{AtomicU32, Ordering};
+
+use rustix::io_uring::io_sqring_offsets;
+
+use crate::io_uring_sqe;
+
+pub struct SubmissionQueue {
+    khead: *const AtomicU32,
+    ktail: *mut AtomicU32,
+    kring_mask: u32,
+    kring_entries: u32,
+    kflags: *const AtomicU32,
+    kdropped: *const AtomicU32,
+    array: *mut u32,
+    sqe_ptr: *mut io_uring_sqe,
+    sqe_mask: u32,
+    sqe_entries: u32,
+    head: AtomicU32,
+    tail: AtomicU32,
+}
+
+impl SubmissionQueue {
+    #[must_use]
+    pub unsafe fn new(
+        sq_ptr: *mut u8,
+        offsets: &io_sqring_offsets,
+        sqe_ptr: *mut io_uring_sqe,
+        sq_entries: u32,
+    ) -> Self {
+        let khead = unsafe { sq_ptr.add(offsets.head as usize) as *const AtomicU32 };
+        let ktail = unsafe { sq_ptr.add(offsets.tail as usize) as *mut AtomicU32 };
+        let kflags = unsafe { sq_ptr.add(offsets.flags as usize) as *const AtomicU32 };
+        let kdropped = unsafe { sq_ptr.add(offsets.dropped as usize) as *const AtomicU32 };
+        let array = unsafe { sq_ptr.add(offsets.array as usize) as *mut u32 };
+
+        let kring_mask = offsets.ring_mask;
+        let kring_entries = offsets.ring_entries;
+
+        Self {
+            khead,
+            ktail,
+            kring_mask,
+            kring_entries,
+            kflags,
+            kdropped,
+            array,
+            sqe_ptr,
+            sqe_mask: sq_entries - 1,
+            sqe_entries: sq_entries,
+            head: AtomicU32::new(0),
+            tail: AtomicU32::new(0),
+        }
+    }
+
+    #[must_use]
+    pub fn ring_mask(&self) -> u32 {
+        self.kring_mask
+    }
+
+    #[must_use]
+    pub fn ring_entries(&self) -> u32 {
+        self.kring_entries
+    }
+
+    fn get_khead(&self) -> u32 {
+        unsafe { (*self.khead).load(Ordering::Acquire) }
+    }
+
+    fn get_ktail(&self) -> u32 {
+        unsafe { (*self.ktail).load(Ordering::Acquire) }
+    }
+
+    fn set_ktail(&self, value: u32) {
+        unsafe { (*self.ktail).store(value, Ordering::Release) }
+    }
+
+    #[must_use]
+    pub fn space_left(&self) -> u32 {
+        let tail = self.tail.load(Ordering::Acquire);
+        let head = self.head.load(Ordering::Relaxed);
+        self.kring_entries - tail.wrapping_sub(head)
+    }
+
+    #[must_use]
+    pub fn peek_sqe(&mut self) -> Option<&mut io_uring_sqe> {
+        let tail = self.tail.load(Ordering::Acquire);
+        let head = self.head.load(Ordering::Relaxed);
+
+        if tail == head.wrapping_add(self.kring_entries) {
+            return None;
+        }
+
+        let index = tail & self.kring_mask;
+        let sqe = unsafe { &mut *self.sqe_ptr.add(index as usize) };
+        Some(sqe)
+    }
+
+    pub fn advance(&mut self, count: u32) {
+        let tail = self.tail.load(Ordering::Acquire);
+        self.tail.store(tail.wrapping_add(count), Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn needs_flush(&self) -> bool {
+        unsafe { (*self.kflags).load(Ordering::Relaxed) & crate::IORING_SQ_NEED_WAKEUP != 0 }
+    }
+
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        self.space_left() == 0
+    }
+
+    pub fn write_sqe(&mut self, sqe: &io_uring_sqe) {
+        let tail = self.tail.load(Ordering::Acquire);
+        let index = tail & self.kring_mask;
+        let array_index = tail & self.sqe_mask;
+
+        unsafe {
+            let target = self.sqe_ptr.add(index as usize);
+            (*target).opcode = sqe.opcode;
+            (*target).flags = sqe.flags;
+            (*target).ioprio = sqe.ioprio;
+            (*target).fd = sqe.fd;
+            (*target).off = sqe.off;
+            (*target).addr = sqe.addr;
+            (*target).len = sqe.len;
+            (*target).rw_flags = sqe.rw_flags;
+            (*target).user_data = sqe.user_data;
+            (*target).buf_index = sqe.buf_index;
+            (*target).personality = sqe.personality;
+            (*target).splice_fd_in = sqe.splice_fd_in;
+        }
+        unsafe {
+            core::ptr::write_volatile(self.array.add(array_index as usize), index);
+        }
+
+        let new_tail = tail.wrapping_add(1);
+        self.tail.store(new_tail, Ordering::Release);
+    }
+
+    pub fn update_kernel_tail(&self) -> u32 {
+        let tail = self.tail.load(Ordering::Acquire);
+        let head = self.head.load(Ordering::Relaxed);
+        let to_submit = tail.wrapping_sub(head);
+        self.set_ktail(tail);
+        to_submit
+    }
+
+    pub fn update_from_kernel(&self) {
+        let khead = self.get_khead();
+        self.head.store(khead, Ordering::Release);
+    }
+}

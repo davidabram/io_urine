@@ -1,0 +1,23 @@
+[package]
+name = "io_urine"
+version = "0.1.0"
+edition = "2021"
+description = "Pure Rust, no_std, no libc io_uring library inspired by Zig's std.os.linux.IoUring"
+
+[dependencies]
+rustix = { version = "0.38", features = ["io_uring", "mm"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.24"
+
+[features]
+default = []
+std = ["rustix/std"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = true
