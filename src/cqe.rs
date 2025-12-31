@@ -1,4 +1,5 @@
 use crate::io_uring_cqe;
+use rustix::io::Errno;
 
 pub const IORING_CQE_F_BUFFER: u32 = 1 << 0;
 pub const IORING_CQE_F_MORE: u32 = 1 << 1;
@@ -48,4 +49,18 @@ pub fn cqe_user_data(cqe: &io_uring_cqe) -> u64 {
 #[must_use]
 pub fn cqe_flags(cqe: &io_uring_cqe) -> u32 {
     cqe.flags
+}
+
+#[must_use]
+pub fn cqe_res_to_result(res: i32) -> Result<i32, Errno> {
+    if res >= 0 {
+        Ok(res)
+    } else {
+        Err(Errno::from_raw_os_error(-res))
+    }
+}
+
+#[must_use]
+pub fn cqe_result_to_result(cqe: &io_uring_cqe) -> Result<i32, Errno> {
+    cqe_res_to_result(cqe.res)
 }

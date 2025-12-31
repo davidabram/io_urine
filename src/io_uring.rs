@@ -1,4 +1,4 @@
-use core::ffi::c_void;
+use core::ffi::{c_void, CStr};
 use core::ptr::{null, null_mut};
 
 use rustix::fd::{AsFd, AsRawFd, OwnedFd};
@@ -278,7 +278,12 @@ impl IoUring {
     #[doc = "Returns `EnterError` if the submit fails."]
     pub fn submit_and_wait(&mut self, wait_count: usize) -> Result<usize, EnterError> {
         let to_submit = self.sq.update_kernel_tail();
-        let result = self.enter(to_submit, wait_count as u32, 0, None);
+        let result = self.enter(
+            to_submit,
+            wait_count as u32,
+            crate::IORING_ENTER_GETEVENTS,
+            None,
+        );
         self.sq.update_from_kernel();
         self.cq.update_kernel_tail();
         result
@@ -410,8 +415,190 @@ impl IoUring {
     }
 
     #[must_use]
+    pub fn openat(&mut self, path: &CStr, flags: u32, mode: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::OpenAt::new(crate::AT_FDCWD, path, flags, mode))
+    }
+
+    #[must_use]
+    pub fn statx(
+        &mut self,
+        path: &CStr,
+        flags: u32,
+        mask: u32,
+        statxbuf: &mut rustix::fs::Statx,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare_mut(&mut crate::sqe::Statx::new(
+            crate::AT_FDCWD,
+            path,
+            flags,
+            mask,
+            statxbuf,
+        ))
+    }
+
+    #[must_use]
+    pub fn fallocate(
+        &mut self,
+        fd: i32,
+        mode: u32,
+        offset: u64,
+        len: u64,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Fallocate::new(fd, mode, offset, len))
+    }
+
+    #[must_use]
+    pub fn fadvise(
+        &mut self,
+        fd: i32,
+        offset: u64,
+        len: u32,
+        advice: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Fadvise::new(fd, offset, len, advice))
+    }
+
+    #[must_use]
+    pub fn madvise(
+        &mut self,
+        addr: *mut c_void,
+        len: u32,
+        advice: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Madvise::new(addr, len, advice))
+    }
+
+    #[must_use]
+    pub fn unlinkat(&mut self, dirfd: i32, path: &CStr, flags: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::UnlinkAt::new(dirfd, path, flags))
+    }
+
+    #[must_use]
+    pub fn unlink(&mut self, path: &CStr, flags: u32) -> Option<&mut io_uring_sqe> {
+        self.unlinkat(crate::AT_FDCWD, path, flags)
+    }
+
+    #[must_use]
+    pub fn renameat(
+        &mut self,
+        olddirfd: i32,
+        oldpath: &CStr,
+        newdirfd: i32,
+        newpath: &CStr,
+        flags: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::RenameAt::new(
+            olddirfd, oldpath, newdirfd, newpath, flags,
+        ))
+    }
+
+    #[must_use]
+    pub fn rename(
+        &mut self,
+        oldpath: &CStr,
+        newpath: &CStr,
+        flags: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.renameat(crate::AT_FDCWD, oldpath, crate::AT_FDCWD, newpath, flags)
+    }
+
+    #[must_use]
+    pub fn mkdirat(&mut self, dirfd: i32, path: &CStr, mode: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::MkdirAt::new(dirfd, path, mode))
+    }
+
+    #[must_use]
+    pub fn mkdir(&mut self, path: &CStr, mode: u32) -> Option<&mut io_uring_sqe> {
+        self.mkdirat(crate::AT_FDCWD, path, mode)
+    }
+
+    #[must_use]
+    pub fn symlinkat(
+        &mut self,
+        target: &CStr,
+        newdirfd: i32,
+        linkpath: &CStr,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::SymlinkAt::new(target, newdirfd, linkpath))
+    }
+
+    #[must_use]
+    pub fn symlink(&mut self, target: &CStr, linkpath: &CStr) -> Option<&mut io_uring_sqe> {
+        self.symlinkat(target, crate::AT_FDCWD, linkpath)
+    }
+
+    #[must_use]
+    pub fn linkat(
+        &mut self,
+        olddirfd: i32,
+        oldpath: &CStr,
+        newdirfd: i32,
+        newpath: &CStr,
+        flags: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::LinkAt::new(
+            olddirfd, oldpath, newdirfd, newpath, flags,
+        ))
+    }
+
+    #[must_use]
+    pub fn link(
+        &mut self,
+        oldpath: &CStr,
+        newpath: &CStr,
+        flags: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.linkat(crate::AT_FDCWD, oldpath, crate::AT_FDCWD, newpath, flags)
+    }
+
+    #[must_use]
+    pub fn close_direct(&mut self, file_index: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::CloseDirect::new(file_index))
+    }
+
+    #[must_use]
     pub fn close(&mut self, fd: i32) -> Option<&mut io_uring_sqe> {
         self.prepare(&crate::sqe::Close::new(fd))
+    }
+
+    #[must_use]
+    pub fn poll_add(&mut self, fd: i32, events: u16) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::PollAdd::new(fd, events))
+    }
+
+    #[must_use]
+    pub fn poll_remove(&mut self, user_data: u64) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::PollRemove::new(user_data))
+    }
+
+    #[must_use]
+    pub fn timeout(
+        &mut self,
+        ts: &crate::Timespec,
+        count: u32,
+        flags: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Timeout::new(ts, count, flags))
+    }
+
+    #[must_use]
+    pub fn timeout_relative(&mut self, ts: &crate::Timespec) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Timeout::relative(ts))
+    }
+
+    #[must_use]
+    pub fn timeout_absolute(&mut self, ts: &crate::Timespec) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Timeout::absolute(ts))
+    }
+
+    #[must_use]
+    pub fn timeout_remove(&mut self, user_data: u64) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::TimeoutRemove::new(user_data))
+    }
+
+    #[must_use]
+    pub fn link_timeout(&mut self, ts: &crate::Timespec, flags: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::LinkTimeout::new(ts, flags))
     }
 }
 

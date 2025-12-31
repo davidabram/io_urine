@@ -102,7 +102,9 @@ impl CompletionQueue {
 
     pub fn advance(&mut self, count: u32) {
         let head = self.head.load(Ordering::Relaxed);
-        self.head.store(head.wrapping_add(count), Ordering::Release);
+        let new_head = head.wrapping_add(count);
+        self.head.store(new_head, Ordering::Release);
+        self.set_khead(new_head);
     }
 
     #[must_use]

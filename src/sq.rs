@@ -91,6 +91,14 @@ impl SubmissionQueue {
         }
 
         let index = tail & self.kring_mask;
+
+        // Tell the kernel which SQE entry we filled.
+        unsafe {
+            core::ptr::write_volatile(self.array.add(index as usize), index);
+        }
+
+        self.tail.store(tail.wrapping_add(1), Ordering::Release);
+
         let sqe = unsafe { &mut *self.sqe_ptr.add(index as usize) };
         Some(sqe)
     }
@@ -113,7 +121,7 @@ impl SubmissionQueue {
     pub fn write_sqe(&mut self, sqe: &io_uring_sqe) {
         let tail = self.tail.load(Ordering::Acquire);
         let index = tail & self.kring_mask;
-        let array_index = tail & self.sqe_mask;
+        let array_index = tail & self.kring_mask;
 
         unsafe {
             let target = self.sqe_ptr.add(index as usize);
@@ -129,6 +137,8 @@ impl SubmissionQueue {
             (*target).buf_index = sqe.buf_index;
             (*target).personality = sqe.personality;
             (*target).splice_fd_in = sqe.splice_fd_in;
+            (*target).addr3 = sqe.addr3;
+            (*target).__pad2 = sqe.__pad2;
         }
         unsafe {
             core::ptr::write_volatile(self.array.add(array_index as usize), index);

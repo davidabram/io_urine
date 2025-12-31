@@ -43,6 +43,8 @@ pub const IORING_OFF_SQ_RING: u64 = 0;
 pub const IORING_OFF_CQ_RING: u64 = 0x0800_0000;
 pub const IORING_OFF_SQES: u64 = 0x1000_0000;
 
+pub const AT_FDCWD: i32 = -100;
+
 pub const IORING_OP_NOP: u8 = 0;
 pub const IORING_OP_READV: u8 = 1;
 pub const IORING_OP_WRITEV: u8 = 2;
@@ -57,27 +59,44 @@ pub const IORING_OP_RECVMSG: u8 = 10;
 pub const IORING_OP_TIMEOUT: u8 = 11;
 pub const IORING_OP_TIMEOUT_REMOVE: u8 = 12;
 pub const IORING_OP_ACCEPT: u8 = 13;
-pub const IORING_OP_CONNECT: u8 = 14;
-pub const IORING_OP_CLOSE: u8 = 15;
-pub const IORING_OP_ALLOC_BUFFERS: u8 = 16;
-pub const IORING_OP_FREE_BUFFERS: u8 = 17;
-pub const IORING_OP_SEND: u8 = 18;
-pub const IORING_OP_RECV: u8 = 19;
-pub const IORING_OP_OPENAT: u8 = 20;
-pub const IORING_OP_CLOSE_DIRECT: u8 = 21;
-pub const IORING_OP_SPLICE: u8 = 22;
-pub const IORING_OP_PROVIDE_BUFFERS: u8 = 23;
-pub const IORING_OP_REMOVE_BUFFERS: u8 = 24;
-pub const IORING_OP_TEE: u8 = 25;
-pub const IORING_OP_SHUTDOWN: u8 = 26;
-pub const IORING_OP_UNLINKAT: u8 = 27;
-pub const IORING_OP_RENAMEAT: u8 = 28;
-pub const IORING_OP_MKDIRAT: u8 = 29;
-pub const IORING_OP_SYMLINKAT: u8 = 30;
-pub const IORING_OP_LINKAT: u8 = 31;
-pub const IORING_OP_MSG_RING: u8 = 32;
-pub const IORING_OP_WRITE: u8 = 33;
-pub const IORING_OP_READ: u8 = 34;
+pub const IORING_OP_ASYNC_CANCEL: u8 = 14;
+pub const IORING_OP_LINK_TIMEOUT: u8 = 15;
+pub const IORING_OP_CONNECT: u8 = 16;
+pub const IORING_OP_FALLOCATE: u8 = 17;
+pub const IORING_OP_OPENAT: u8 = 18;
+pub const IORING_OP_CLOSE: u8 = 19;
+pub const IORING_OP_FILES_UPDATE: u8 = 20;
+pub const IORING_OP_STATX: u8 = 21;
+pub const IORING_OP_READ: u8 = 22;
+pub const IORING_OP_WRITE: u8 = 23;
+pub const IORING_OP_FADVISE: u8 = 24;
+pub const IORING_OP_MADVISE: u8 = 25;
+pub const IORING_OP_SEND: u8 = 26;
+pub const IORING_OP_RECV: u8 = 27;
+pub const IORING_OP_OPENAT2: u8 = 28;
+pub const IORING_OP_EPOLL_CTL: u8 = 29;
+pub const IORING_OP_SPLICE: u8 = 30;
+pub const IORING_OP_PROVIDE_BUFFERS: u8 = 31;
+pub const IORING_OP_REMOVE_BUFFERS: u8 = 32;
+pub const IORING_OP_TEE: u8 = 33;
+pub const IORING_OP_SHUTDOWN: u8 = 34;
+pub const IORING_OP_RENAMEAT: u8 = 35;
+pub const IORING_OP_UNLINKAT: u8 = 36;
+pub const IORING_OP_MKDIRAT: u8 = 37;
+pub const IORING_OP_SYMLINKAT: u8 = 38;
+pub const IORING_OP_LINKAT: u8 = 39;
+pub const IORING_OP_MSG_RING: u8 = 40;
+pub const IORING_OP_FSETXATTR: u8 = 41;
+pub const IORING_OP_SETXATTR: u8 = 42;
+pub const IORING_OP_FGETXATTR: u8 = 43;
+pub const IORING_OP_GETXATTR: u8 = 44;
+pub const IORING_OP_SOCKET: u8 = 45;
+pub const IORING_OP_URING_CMD: u8 = 46;
+pub const IORING_OP_SEND_ZC: u8 = 47;
+pub const IORING_OP_SENDMSG_ZC: u8 = 48;
+
+// Timeout flags
+pub const IORING_TIMEOUT_ABS: u32 = 1 << 0;
 
 pub const IOSQE_FIXED_FILE: u8 = 1 << 0;
 pub const IOSQE_IO_DRAIN: u8 = 1 << 1;
@@ -111,6 +130,21 @@ pub const IORING_F_SOCKET_SENDRCV_NONE: u32 = 1 << 10;
 pub const IORING_F_NATIVE_WORKERS: u32 = 1 << 11;
 pub const IORING_F_REG_REG_RING: u32 = 1 << 12;
 
+// Poll event flags
+pub const POLLIN: u16 = 0x0001;
+pub const POLLPRI: u16 = 0x0002;
+pub const POLLOUT: u16 = 0x0004;
+pub const POLLERR: u16 = 0x0008;
+pub const POLLHUP: u16 = 0x0010;
+pub const POLLNVAL: u16 = 0x0020;
+pub const POLLRDNORM: u16 = 0x0040;
+pub const POLLRDBAND: u16 = 0x0080;
+pub const POLLWRNORM: u16 = 0x0100;
+pub const POLLWRBAND: u16 = 0x0200;
+pub const POLLMSG: u16 = 0x0400;
+pub const POLLREMOVE: u16 = 0x1000;
+pub const POLLTICK: u16 = 0x2000;
+
 pub use rustix::io_uring::{io_cqring_offsets, io_sqring_offsets};
 
 #[repr(C)]
@@ -128,7 +162,8 @@ pub struct io_uring_sqe {
     pub buf_index: u16,
     pub personality: u16,
     pub splice_fd_in: i32,
-    pub(crate) __pad2: [u64; 3],
+    pub addr3: u64,
+    pub(crate) __pad2: u64,
 }
 
 impl io_uring_sqe {
@@ -144,6 +179,20 @@ pub struct io_uring_cqe {
     pub user_data: u64,
     pub res: i32,
     pub flags: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Timespec {
+    pub tv_sec: i64,
+    pub tv_nsec: i64,
+}
+
+impl Timespec {
+    #[must_use]
+    pub fn new(tv_sec: i64, tv_nsec: i64) -> Self {
+        Self { tv_sec, tv_nsec }
+    }
 }
 
 #[repr(C)]
