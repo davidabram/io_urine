@@ -600,6 +600,168 @@ impl IoUring {
     pub fn link_timeout(&mut self, ts: &crate::Timespec, flags: u32) -> Option<&mut io_uring_sqe> {
         self.prepare(&crate::sqe::LinkTimeout::new(ts, flags))
     }
+
+    // Networking convenience methods
+
+    #[must_use]
+    pub fn send(&mut self, fd: i32, buf: &[u8], flags: i32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Send::new(fd, buf, flags))
+    }
+
+    #[must_use]
+    pub fn recv(&mut self, fd: i32, buf: &mut [u8], flags: i32) -> Option<&mut io_uring_sqe> {
+        self.prepare_mut(&mut crate::sqe::Recv::new(fd, buf, flags))
+    }
+
+    #[must_use]
+    pub fn sendmsg(
+        &mut self,
+        fd: i32,
+        msg: &crate::sqe::MsgHdr,
+        flags: i32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::SendMsg::new(fd, msg, flags))
+    }
+
+    #[must_use]
+    pub fn recvmsg<'a>(
+        &mut self,
+        fd: i32,
+        msg: &'a mut crate::sqe::MsgHdr<'a>,
+        flags: i32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare_mut(&mut crate::sqe::RecvMsg::new(fd, msg, flags))
+    }
+
+    #[must_use]
+    pub fn accept(&mut self, fd: i32, flags: i32) -> Option<&mut io_uring_sqe> {
+        self.prepare_mut(&mut crate::sqe::Accept::new(fd, flags))
+    }
+
+    #[must_use]
+    pub fn accept_with_addr(
+        &mut self,
+        fd: i32,
+        addr: &mut [u8],
+        addrlen: &mut u32,
+        flags: i32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare_mut(&mut crate::sqe::Accept::with_addr(fd, addr, addrlen, flags))
+    }
+
+    #[must_use]
+    pub fn accept_with_file_index(
+        &mut self,
+        fd: i32,
+        file_index: u32,
+        flags: i32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare_mut(&mut crate::sqe::Accept::with_file_index(
+            fd, file_index, flags,
+        ))
+    }
+
+    #[must_use]
+    pub fn accept_with_addr_and_file_index(
+        &mut self,
+        fd: i32,
+        addr: &mut [u8],
+        addrlen: &mut u32,
+        file_index: u32,
+        flags: i32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare_mut(&mut crate::sqe::Accept::with_addr_and_file_index(
+            fd, addr, addrlen, file_index, flags,
+        ))
+    }
+
+    #[must_use]
+    pub fn connect(&mut self, fd: i32, addr: &[u8], addrlen: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Connect::new(fd, addr, addrlen))
+    }
+
+    #[must_use]
+    pub fn shutdown(&mut self, fd: i32, how: i32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Shutdown::new(fd, how))
+    }
+
+    // Advanced I/O convenience methods
+
+    #[must_use]
+    pub fn splice(
+        &mut self,
+        fd_in: i32,
+        off_in: u64,
+        fd_out: i32,
+        off_out: u64,
+        len: u32,
+        flags: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Splice::new(
+            fd_in, off_in, fd_out, off_out, len, flags,
+        ))
+    }
+
+    #[must_use]
+    pub fn tee(
+        &mut self,
+        fd_in: i32,
+        fd_out: i32,
+        len: u32,
+        flags: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::Tee::new(fd_in, fd_out, len, flags))
+    }
+
+    #[must_use]
+    pub fn provide_buffers(
+        &mut self,
+        addr: *mut c_void,
+        len: u32,
+        bgid: u16,
+        bid: u16,
+        nbufs: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::ProvideBuffers::new(
+            addr, len, bgid, bid, nbufs,
+        ))
+    }
+
+    #[must_use]
+    pub fn remove_buffers(&mut self, bgid: u16, nr: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::RemoveBuffers::new(bgid, nr))
+    }
+
+    #[must_use]
+    pub fn free_buffers(&mut self, bgid: u16) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::FreeBuffers::new(bgid))
+    }
+
+    #[must_use]
+    pub fn cancel(&mut self, user_data: u64, flags: u32) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::AsyncCancel::new(user_data, flags))
+    }
+
+    #[must_use]
+    pub fn cancel_all(&mut self) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::AsyncCancel::all())
+    }
+
+    #[must_use]
+    pub fn cancel_any(&mut self) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::AsyncCancel::any())
+    }
+
+    #[must_use]
+    pub fn msg_ring(
+        &mut self,
+        fd: i32,
+        user_data: u64,
+        flags: u32,
+        len: u32,
+    ) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::MsgRing::new(fd, user_data, flags, len))
+    }
 }
 
 impl Drop for IoUring {

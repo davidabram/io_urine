@@ -36,7 +36,7 @@ Implemented (high level):
 - 34 unit tests (`cargo test` is currently green).
 
 Not implemented (yet):
-- Networking operations (Phase 4).
+- Networking operations (Phase 4) - Complete send/recv, message passing, and connection management
 - Advanced I/O (splice, tee, cancel, buffer rings, etc., Phases 5+).
 - Higher-level "ergonomic" helpers (user_data allocators, multishot helpers,
   robust feature gating, etc.).

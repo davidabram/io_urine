@@ -1,8 +1,9 @@
 use core::ffi::{c_void, CStr};
 
 use crate::{
-    io_uring_sqe, PrepSqe, PrepSqeMut, IORING_OP_NOP, IOSQE_ASYNC, IOSQE_FIXED_FILE,
-    IOSQE_IO_DRAIN, IOSQE_IO_HARDLINK, IOSQE_IO_LINK, IOSQE_SELECT_GROUP,
+    io_uring_sqe, PrepSqe, PrepSqeMut, IORING_OP_NOP, IOSQE_ASYNC, IOSQE_BUFFER_SELECT,
+    IOSQE_CQE_SKIP_SUCCESS, IOSQE_FIXED_FILE, IOSQE_IO_DRAIN, IOSQE_IO_HARDLINK, IOSQE_IO_LINK,
+    IOSQE_SELECT_GROUP,
 };
 
 #[repr(C)]
@@ -22,6 +23,77 @@ impl Iovec {
     }
 }
 
+// Message header for sendmsg/recvmsg operations
+#[repr(C)]
+#[derive(Debug)]
+pub struct MsgHdr<'a> {
+    pub msg_name: *mut c_void,
+    pub msg_namelen: u32,
+    pub msg_iov: &'a mut [Iovec],
+    pub msg_control: *mut c_void,
+    pub msg_controllen: u32,
+    pub msg_flags: i32,
+}
+
+impl<'a> MsgHdr<'a> {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            msg_name: core::ptr::null_mut(),
+            msg_namelen: 0,
+            msg_iov: &mut [],
+            msg_control: core::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn with_addr(addr: &'a mut [u8]) -> Self {
+        Self {
+            msg_name: addr.as_mut_ptr() as *mut c_void,
+            msg_namelen: addr.len() as u32,
+            msg_iov: &mut [],
+            msg_control: core::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn with_iov(iov: &'a mut [Iovec]) -> Self {
+        Self {
+            msg_name: core::ptr::null_mut(),
+            msg_namelen: 0,
+            msg_iov: iov,
+            msg_control: core::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn with_addr_and_iov(addr: &'a mut [u8], iov: &'a mut [Iovec]) -> Self {
+        Self {
+            msg_name: addr.as_mut_ptr() as *mut c_void,
+            msg_namelen: addr.len() as u32,
+            msg_iov: iov,
+            msg_control: core::ptr::null_mut(),
+            msg_controllen: 0,
+            msg_flags: 0,
+        }
+    }
+
+    pub fn set_control(&mut self, control: *mut c_void, controllen: u32) {
+        self.msg_control = control;
+        self.msg_controllen = controllen;
+    }
+
+    pub fn set_flags(&mut self, flags: i32) {
+        self.msg_flags = flags;
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SqeFlags {
@@ -30,7 +102,8 @@ pub enum SqeFlags {
     IoLink = IOSQE_IO_LINK,
     IoHardlink = IOSQE_IO_HARDLINK,
     Async = IOSQE_ASYNC,
-    SelectGroup = IOSQE_SELECT_GROUP,
+    BufferSelect = IOSQE_BUFFER_SELECT,
+    CqeSkipSuccess = IOSQE_CQE_SKIP_SUCCESS,
 }
 
 impl SqeFlags {
@@ -745,6 +818,437 @@ impl PrepSqe for LinkTimeout<'_> {
     fn prep(&self, sqe: &mut io_uring_sqe) {
         sqe.opcode = crate::IORING_OP_LINK_TIMEOUT;
         sqe.addr = self.ts as *const crate::Timespec as u64;
+        sqe.rw_flags = self.flags as i32;
+    }
+}
+
+// Networking operations
+
+pub struct Send<'a> {
+    fd: i32,
+    buf: &'a [u8],
+    flags: i32,
+}
+
+impl<'a> Send<'a> {
+    #[must_use]
+    pub fn new(fd: i32, buf: &'a [u8], flags: i32) -> Self {
+        Self { fd, buf, flags }
+    }
+}
+
+impl PrepSqe for Send<'_> {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_SEND;
+        sqe.fd = self.fd;
+        sqe.addr = self.buf.as_ptr() as u64;
+        sqe.len = self.buf.len() as u32;
+        sqe.rw_flags = self.flags;
+    }
+}
+
+pub struct Recv<'a> {
+    fd: i32,
+    buf: &'a mut [u8],
+    flags: i32,
+}
+
+impl<'a> Recv<'a> {
+    #[must_use]
+    pub fn new(fd: i32, buf: &'a mut [u8], flags: i32) -> Self {
+        Self { fd, buf, flags }
+    }
+}
+
+impl PrepSqeMut for Recv<'_> {
+    fn prep(&mut self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_RECV;
+        sqe.fd = self.fd;
+        sqe.addr = self.buf.as_mut_ptr() as u64;
+        sqe.len = self.buf.len() as u32;
+        sqe.rw_flags = self.flags;
+    }
+}
+
+pub struct SendMsg<'a> {
+    fd: i32,
+    msg: &'a MsgHdr<'a>,
+    flags: i32,
+}
+
+impl<'a> SendMsg<'a> {
+    #[must_use]
+    pub fn new(fd: i32, msg: &'a MsgHdr<'a>, flags: i32) -> Self {
+        Self { fd, msg, flags }
+    }
+}
+
+impl PrepSqe for SendMsg<'_> {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_SENDMSG;
+        sqe.fd = self.fd;
+        sqe.addr = (self.msg as *const MsgHdr) as u64;
+        sqe.len = 1;
+        sqe.rw_flags = self.flags;
+    }
+}
+
+pub struct RecvMsg<'a> {
+    fd: i32,
+    msg: &'a mut MsgHdr<'a>,
+    flags: i32,
+}
+
+impl<'a> RecvMsg<'a> {
+    #[must_use]
+    pub fn new(fd: i32, msg: &'a mut MsgHdr<'a>, flags: i32) -> Self {
+        Self { fd, msg, flags }
+    }
+}
+
+impl PrepSqeMut for RecvMsg<'_> {
+    fn prep(&mut self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_RECVMSG;
+        sqe.fd = self.fd;
+        sqe.addr = (self.msg as *mut MsgHdr) as u64;
+        sqe.len = 1;
+        sqe.rw_flags = self.flags;
+    }
+}
+
+// Connection management operations
+
+pub struct Accept<'a> {
+    fd: i32,
+    addr: Option<&'a mut [u8]>,
+    addrlen: Option<*mut u32>,
+    flags: i32,
+    file_index: u32,
+}
+
+impl<'a> Accept<'a> {
+    #[must_use]
+    pub fn new(fd: i32, flags: i32) -> Self {
+        Self {
+            fd,
+            addr: None,
+            addrlen: None,
+            flags,
+            file_index: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn with_addr(fd: i32, addr: &'a mut [u8], addrlen: &'a mut u32, flags: i32) -> Self {
+        Self {
+            fd,
+            addr: Some(addr),
+            addrlen: Some(addrlen as *mut u32),
+            flags,
+            file_index: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn with_file_index(fd: i32, file_index: u32, flags: i32) -> Self {
+        Self {
+            fd,
+            addr: None,
+            addrlen: None,
+            flags,
+            file_index,
+        }
+    }
+
+    #[must_use]
+    pub fn with_addr_and_file_index(
+        fd: i32,
+        addr: &'a mut [u8],
+        addrlen: &'a mut u32,
+        file_index: u32,
+        flags: i32,
+    ) -> Self {
+        Self {
+            fd,
+            addr: Some(addr),
+            addrlen: Some(addrlen as *mut u32),
+            flags,
+            file_index,
+        }
+    }
+}
+
+impl PrepSqeMut for Accept<'_> {
+    fn prep(&mut self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_ACCEPT;
+        sqe.fd = self.fd;
+
+        match (self.addr.as_mut(), self.addrlen) {
+            (Some(addr), Some(addrlen)) => {
+                sqe.addr = addr.as_mut_ptr() as u64;
+                // addr2 field is in union with off field
+                // SAFETY: addrlen is a valid pointer to u32 provided by the caller
+                unsafe {
+                    sqe.off = *addrlen as u64;
+                }
+            }
+            _ => {
+                sqe.addr = 0;
+                sqe.off = 0;
+            }
+        }
+
+        sqe.len = 0;
+        sqe.rw_flags = self.flags;
+        sqe.splice_fd_in = self.file_index as i32;
+    }
+}
+
+pub struct Connect<'a> {
+    fd: i32,
+    addr: &'a [u8],
+    addrlen: u32,
+}
+
+impl<'a> Connect<'a> {
+    #[must_use]
+    pub fn new(fd: i32, addr: &'a [u8], addrlen: u32) -> Self {
+        Self { fd, addr, addrlen }
+    }
+}
+
+impl PrepSqe for Connect<'_> {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_CONNECT;
+        sqe.fd = self.fd;
+        sqe.addr = self.addr.as_ptr() as u64;
+        sqe.len = self.addrlen;
+    }
+}
+
+pub struct Shutdown {
+    fd: i32,
+    how: i32,
+}
+
+impl Shutdown {
+    #[must_use]
+    pub fn new(fd: i32, how: i32) -> Self {
+        Self { fd, how }
+    }
+}
+
+impl PrepSqe for Shutdown {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_SHUTDOWN;
+        sqe.fd = self.fd;
+        sqe.len = 0;
+        sqe.rw_flags = self.how;
+    }
+}
+
+// Advanced I/O operations
+
+pub struct Splice {
+    fd_in: i32,
+    off_in: u64,
+    fd_out: i32,
+    off_out: u64,
+    len: u32,
+    flags: u32,
+}
+
+impl Splice {
+    #[must_use]
+    pub fn new(fd_in: i32, off_in: u64, fd_out: i32, off_out: u64, len: u32, flags: u32) -> Self {
+        Self {
+            fd_in,
+            off_in,
+            fd_out,
+            off_out,
+            len,
+            flags,
+        }
+    }
+}
+
+impl PrepSqe for Splice {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_SPLICE;
+        sqe.fd = self.fd_out;
+        sqe.off = self.off_out;
+        sqe.len = self.len;
+        sqe.splice_fd_in = self.fd_in;
+        sqe.addr3 = self.off_in;
+        sqe.rw_flags = self.flags as i32;
+    }
+}
+
+pub struct Tee {
+    fd_in: i32,
+    fd_out: i32,
+    len: u32,
+    flags: u32,
+}
+
+impl Tee {
+    #[must_use]
+    pub fn new(fd_in: i32, fd_out: i32, len: u32, flags: u32) -> Self {
+        Self {
+            fd_in,
+            fd_out,
+            len,
+            flags,
+        }
+    }
+}
+
+impl PrepSqe for Tee {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_TEE;
+        sqe.fd = self.fd_out;
+        sqe.off = 0;
+        sqe.len = self.len;
+        sqe.splice_fd_in = self.fd_in;
+        sqe.addr3 = 0;
+        sqe.rw_flags = self.flags as i32;
+    }
+}
+
+// Buffer allocation is done via PROVIE_BUFFERS with specific flags
+// ALLOC_BUFFERS doesn't exist as a separate opcode in recent kernels
+
+pub struct FreeBuffers {
+    bgid: u16,
+}
+
+impl FreeBuffers {
+    #[must_use]
+    pub fn new(bgid: u16) -> Self {
+        Self { bgid }
+    }
+}
+
+impl PrepSqe for FreeBuffers {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_REMOVE_BUFFERS;
+        sqe.addr = self.bgid as u64;
+        sqe.len = 0;
+    }
+}
+
+pub struct ProvideBuffers {
+    addr: *mut c_void,
+    len: u32,
+    bgid: u16,
+    bid: u16,
+    nbufs: u32,
+}
+
+impl ProvideBuffers {
+    #[must_use]
+    pub fn new(addr: *mut c_void, len: u32, bgid: u16, bid: u16, nbufs: u32) -> Self {
+        Self {
+            addr,
+            len,
+            bgid,
+            bid,
+            nbufs,
+        }
+    }
+}
+
+impl PrepSqe for ProvideBuffers {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_PROVIDE_BUFFERS;
+        sqe.addr = self.addr as u64;
+        sqe.len = self.len;
+        sqe.off = ((self.bgid as u64) << 32) | (self.bid as u64);
+        sqe.buf_index = self.nbufs as u16;
+    }
+}
+
+pub struct RemoveBuffers {
+    bgid: u16,
+    nr: u32,
+}
+
+impl RemoveBuffers {
+    #[must_use]
+    pub fn new(bgid: u16, nr: u32) -> Self {
+        Self { bgid, nr }
+    }
+}
+
+impl PrepSqe for RemoveBuffers {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_REMOVE_BUFFERS;
+        sqe.addr = self.bgid as u64;
+        sqe.len = self.nr;
+    }
+}
+
+pub struct AsyncCancel {
+    user_data: u64,
+    flags: u32,
+}
+
+impl AsyncCancel {
+    #[must_use]
+    pub fn new(user_data: u64, flags: u32) -> Self {
+        Self { user_data, flags }
+    }
+
+    #[must_use]
+    pub fn all() -> Self {
+        Self {
+            user_data: 0,
+            flags: crate::IORING_ASYNC_CANCEL_ALL,
+        }
+    }
+
+    #[must_use]
+    pub fn any() -> Self {
+        Self {
+            user_data: 0,
+            flags: crate::IORING_ASYNC_CANCEL_ANY,
+        }
+    }
+}
+
+impl PrepSqe for AsyncCancel {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_ASYNC_CANCEL;
+        sqe.addr = self.user_data;
+        sqe.len = self.flags;
+    }
+}
+
+pub struct MsgRing {
+    fd: i32,
+    user_data: u64,
+    flags: u32,
+    len: u32,
+}
+
+impl MsgRing {
+    #[must_use]
+    pub fn new(fd: i32, user_data: u64, flags: u32, len: u32) -> Self {
+        Self {
+            fd,
+            user_data,
+            flags,
+            len,
+        }
+    }
+}
+
+impl PrepSqe for MsgRing {
+    fn prep(&self, sqe: &mut io_uring_sqe) {
+        sqe.opcode = crate::IORING_OP_MSG_RING;
+        sqe.fd = self.fd;
+        sqe.addr = self.user_data;
+        sqe.len = self.len;
         sqe.rw_flags = self.flags as i32;
     }
 }

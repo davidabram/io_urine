@@ -23,7 +23,9 @@ pub use err::{EnterError, InitError, IoUringResult};
 pub use io_uring::{IoUring, Probe};
 pub use mmap::RwMmap;
 pub use sq::SubmissionQueue;
-pub use sqe::{Iovec, SqeFlags};
+pub use sqe::{
+    sqe_flags, Accept, Connect, Iovec, MsgHdr, Recv, RecvMsg, Send, SendMsg, Shutdown, SqeFlags,
+};
 
 pub const IORING_SETUP_IOPOLL: u32 = 1 << 0;
 pub const IORING_SETUP_SQPOLL: u32 = 1 << 1;
@@ -98,6 +100,14 @@ pub const IORING_OP_SENDMSG_ZC: u8 = 48;
 // Timeout flags
 pub const IORING_TIMEOUT_ABS: u32 = 1 << 0;
 
+// Async cancel flags
+pub const IORING_ASYNC_CANCEL_ALL: u32 = 1 << 0;
+pub const IORING_ASYNC_CANCEL_ANY: u32 = 1 << 1;
+pub const IORING_ASYNC_CANCEL_FD: u32 = 1 << 2;
+
+// Buffer ring flags
+pub const IORING_SETUP_BUFFER_RING: u64 = 1 << 3;
+
 pub const IOSQE_FIXED_FILE: u8 = 1 << 0;
 pub const IOSQE_IO_DRAIN: u8 = 1 << 1;
 pub const IOSQE_IO_LINK: u8 = 1 << 2;
@@ -144,6 +154,58 @@ pub const POLLWRBAND: u16 = 0x0200;
 pub const POLLMSG: u16 = 0x0400;
 pub const POLLREMOVE: u16 = 0x1000;
 pub const POLLTICK: u16 = 0x2000;
+
+// Socket types
+pub const SOCK_STREAM: i32 = 1;
+pub const SOCK_DGRAM: i32 = 2;
+pub const SOCK_RAW: i32 = 3;
+pub const SOCK_RDM: i32 = 4;
+pub const SOCK_SEQPACKET: i32 = 5;
+pub const SOCK_NONBLOCK: i32 = 0o0004000;
+pub const SOCK_CLOEXEC: i32 = 0o2000000;
+
+// Address families
+pub const AF_UNSPEC: i32 = 0;
+pub const AF_UNIX: i32 = 1;
+pub const AF_INET: i32 = 2;
+pub const AF_INET6: i32 = 10;
+pub const AF_NETLINK: i32 = 16;
+
+// Protocol families
+pub const PF_UNSPEC: i32 = AF_UNSPEC;
+pub const PF_UNIX: i32 = AF_UNIX;
+pub const PF_INET: i32 = AF_INET;
+pub const PF_INET6: i32 = AF_INET6;
+pub const PF_NETLINK: i32 = AF_NETLINK;
+
+// Message flags
+pub const MSG_OOB: i32 = 0x0001;
+pub const MSG_PEEK: i32 = 0x0002;
+pub const MSG_DONTROUTE: i32 = 0x0004;
+pub const MSG_CTRUNC: i32 = 0x0008;
+pub const MSG_PROXY: i32 = 0x0010;
+pub const MSG_TRUNC: i32 = 0x0020;
+pub const MSG_DONTWAIT: i32 = 0x0040;
+pub const MSG_EOR: i32 = 0x0080;
+pub const MSG_WAITALL: i32 = 0x0100;
+pub const MSG_FIN: i32 = 0x0200;
+pub const MSG_SYN: i32 = 0x0400;
+pub const MSG_CONFIRM: i32 = 0x0800;
+pub const MSG_RST: i32 = 0x1000;
+pub const MSG_ERRQUEUE: i32 = 0x2000;
+pub const MSG_NOSIGNAL: i32 = 0x4000;
+pub const MSG_MORE: i32 = 0x8000;
+pub const MSG_WAITFORONE: i32 = 0x10000;
+pub const MSG_ZEROCOPY: i32 = 0x40000000;
+pub const MSG_BATCH: i32 = 0x40000;
+
+// Socket level
+pub const SOL_SOCKET: i32 = 1;
+
+// Shutdown flags
+pub const SHUT_RD: i32 = 0;
+pub const SHUT_WR: i32 = 1;
+pub const SHUT_RDWR: i32 = 2;
 
 pub use rustix::io_uring::{io_cqring_offsets, io_sqring_offsets};
 
