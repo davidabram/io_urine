@@ -120,4 +120,28 @@ impl CompletionQueue {
     pub(crate) fn cqe_ptr(&self) -> *mut io_uring_cqe {
         self.cqe_ptr
     }
+
+    /// Check if a CQE has the MORE flag set (multi-shot operation)
+    #[must_use]
+    pub fn cqe_is_multishot(&self, cqe: &crate::io_uring_cqe) -> bool {
+        cqe.flags & crate::IORING_CQE_F_MORE != 0
+    }
+
+    /// Check if a CQE has the BUFFER flag set (buffer selection)
+    #[must_use]
+    pub fn cqe_has_buffer(&self, cqe: &crate::io_uring_cqe) -> bool {
+        cqe.flags & crate::IORING_CQE_F_BUFFER != 0
+    }
+
+    /// Get buffer ID from a CQE with BUFFER flag
+    #[must_use]
+    pub fn cqe_buffer_id(&self, cqe: &crate::io_uring_cqe) -> u16 {
+        (cqe.flags >> 16) as u16
+    }
+
+    /// Check if a CQE has any of the specified flags
+    #[must_use]
+    pub fn cqe_has_flags(&self, cqe: &crate::io_uring_cqe, flags: u32) -> bool {
+        cqe.flags & flags != 0
+    }
 }

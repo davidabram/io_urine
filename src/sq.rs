@@ -17,6 +17,8 @@ pub struct SubmissionQueue {
     sqe_entries: u32,
     head: AtomicU32,
     tail: AtomicU32,
+    // SQE cache for performance optimization
+    sqe_cache: core::cell::RefCell<Vec<*mut io_uring_sqe>>,
 }
 
 impl SubmissionQueue {
@@ -49,6 +51,7 @@ impl SubmissionQueue {
             sqe_entries: sq_entries,
             head: AtomicU32::new(0),
             tail: AtomicU32::new(0),
+            sqe_cache: core::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -159,5 +162,35 @@ impl SubmissionQueue {
     pub fn update_from_kernel(&self) {
         let khead = self.get_khead();
         self.head.store(khead, Ordering::Release);
+    }
+
+    /// Reclaim a completed SQE back to the cache for reuse
+    ///
+    /// This method should be called after an operation is completed
+    /// to avoid the overhead of SQE initialization for frequent operations.
+    pub fn reclaim_sqe(&self, sqe_ptr: *mut io_uring_sqe) {
+        // SAFETY: sqe_ptr must be a valid pointer within the SQE array
+        // and not currently in use by the kernel
+        unsafe {
+            // Reset the SQE to default values for reuse
+            (*sqe_ptr) = io_uring_sqe::default();
+            // Add to cache for later reuse
+            self.sqe_cache.borrow_mut().push(sqe_ptr);
+        }
+    }
+
+    /// Get a cached SQE if available, or return None if cache is empty
+    pub fn get_cached_sqe(&self) -> Option<*mut io_uring_sqe> {
+        self.sqe_cache.borrow_mut().pop()
+    }
+
+    /// Clear the SQE cache
+    pub fn clear_sqe_cache(&self) {
+        self.sqe_cache.borrow_mut().clear();
+    }
+
+    /// Get the number of cached SQEs
+    pub fn cached_sqe_count(&self) -> usize {
+        self.sqe_cache.borrow().len()
     }
 }

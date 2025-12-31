@@ -21,6 +21,9 @@ pub struct IoUring {
     _sqe_mmap: RwMmap,
     sq: SubmissionQueue,
     cq: CompletionQueue,
+    // User data allocator for automatic user_data management
+    next_user_data: core::sync::atomic::AtomicU64,
+    free_user_data: core::cell::RefCell<Vec<u64>>,
 }
 
 const PROBE_OPS: usize = 128;
@@ -123,6 +126,8 @@ impl IoUring {
             _sqe_mmap: sqe_mmap_mapping,
             sq,
             cq,
+            next_user_data: core::sync::atomic::AtomicU64::new(1),
+            free_user_data: core::cell::RefCell::new(Vec::new()),
         })
     }
 
@@ -258,6 +263,221 @@ impl IoUring {
         let sqe = self.sq.peek_sqe()?;
         *sqe = io_uring_sqe::default();
         Some(sqe)
+    }
+
+    /// Get an SQE with reclaim support for better performance
+    ///
+    /// This method first tries to get a cached SQE, falling back to
+    /// a fresh SQE if the cache is empty. The returned SQE should be
+    /// reclaimed using `reclaim_sqe()` when the operation completes.
+    #[must_use]
+    pub fn get_sqe_with_reclaim(&mut self) -> Option<&mut io_uring_sqe> {
+        // Try to get a cached SQE first
+        if let Some(cached_sqe_ptr) = self.sq.get_cached_sqe() {
+            // SAFETY: cached_sqe_ptr is a valid pointer within the SQE array
+            unsafe {
+                return Some(&mut *cached_sqe_ptr);
+            }
+        }
+
+        // Fall back to regular SQE allocation
+        self.get_sqe()
+    }
+
+    /// Reclaim a completed SQE back to the cache
+    ///
+    /// This should be called after processing the corresponding CQE
+    /// to reuse the SQE for future operations and avoid initialization overhead.
+    pub fn reclaim_sqe(&mut self, sqe: &mut io_uring_sqe) {
+        // Take a pointer to SQE before reclaiming it to avoid borrow issues
+        let sqe_ptr = sqe as *mut io_uring_sqe;
+        self.sq.reclaim_sqe(sqe_ptr);
+    }
+
+    // Linked operation helpers
+
+    /// Mark an SQE as linked with the next SQE
+    ///
+    /// The next SQE submitted will only execute if this SQE succeeds.
+    /// This creates a dependency chain between operations.
+    #[must_use]
+    pub fn link_sqe(sqe: &mut io_uring_sqe) -> &mut io_uring_sqe {
+        sqe.flags |= crate::IOSQE_IO_LINK;
+        sqe
+    }
+
+    /// Mark an SQE as hard-linked with the next SQE
+    ///
+    /// Unlike normal links, hard links are not broken on failure.
+    /// The next SQE will execute regardless of this SQE's result.
+    #[must_use]
+    pub fn hardlink_sqe(sqe: &mut io_uring_sqe) -> &mut io_uring_sqe {
+        sqe.flags |= crate::IOSQE_IO_HARDLINK;
+        sqe
+    }
+
+    /// Mark an SQE for drain mode
+    ///
+    /// When set, the kernel will drain the submission queue before
+    /// executing this operation, ensuring all previously submitted
+    /// operations complete first.
+    #[must_use]
+    pub fn drain_sqe(sqe: &mut io_uring_sqe) -> &mut io_uring_sqe {
+        sqe.flags |= crate::IOSQE_IO_DRAIN;
+        sqe
+    }
+
+    /// Mark an SQE as asynchronous
+    ///
+    /// This hints to the kernel that the operation should be
+    /// executed asynchronously when possible.
+    #[must_use]
+    pub fn make_async(sqe: &mut io_uring_sqe) -> &mut io_uring_sqe {
+        sqe.flags |= crate::IOSQE_ASYNC;
+        sqe
+    }
+
+    /// Clear all flags from an SQE
+    #[must_use]
+    pub fn clear_sqe_flags(sqe: &mut io_uring_sqe) -> &mut io_uring_sqe {
+        sqe.flags = 0;
+        sqe
+    }
+
+    /// Get current flags of an SQE
+    #[must_use]
+    pub fn get_sqe_flags(sqe: &io_uring_sqe) -> u8 {
+        sqe.flags
+    }
+
+    // User data allocator methods
+
+    /// Allocate a unique user_data value for SQE tracking
+    ///
+    /// Returns a unique value that can be used to identify operations
+    /// through their corresponding CQEs. The allocator reuses freed
+    /// values to avoid overflow.
+    #[must_use]
+    pub fn alloc_user_data(&self) -> u64 {
+        // Try to reuse a freed user_data first
+        if let Some(reused) = self.free_user_data.borrow_mut().pop() {
+            return reused;
+        }
+
+        // Allocate new user_data, wrapping around if we reach u64::MAX
+        let current = self
+            .next_user_data
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if current == 0 {
+            // If we wrapped back to 0, use 1 to avoid reserved value
+            self.next_user_data
+                .store(2, core::sync::atomic::Ordering::Relaxed);
+            1
+        } else {
+            current
+        }
+    }
+
+    /// Free a user_data value for reuse
+    ///
+    /// This should be called after processing the corresponding CQE
+    /// to allow the user_data value to be reused for future operations.
+    pub fn free_user_data(&self, user_data: u64) {
+        // Don't add 0 to free list as it's a reserved value
+        if user_data != 0 {
+            self.free_user_data.borrow_mut().push(user_data);
+        }
+    }
+
+    /// Set user_data on an SQE using the allocator
+    ///
+    /// Convenience method that allocates a user_data value
+    /// and sets it on the provided SQE.
+    #[must_use]
+    pub fn set_sqe_user_data(sqe: &mut io_uring_sqe, user_data: u64) -> &mut io_uring_sqe {
+        sqe.user_data = user_data;
+        sqe
+    }
+
+    /// Get the number of currently allocated user_data values
+    #[must_use]
+    pub fn allocated_user_data_count(&self) -> usize {
+        // Total allocated = next_user_data - freed_count
+        let next_val = self
+            .next_user_data
+            .load(core::sync::atomic::Ordering::Relaxed);
+        let freed_count = self.free_user_data.borrow().len();
+
+        if next_val == 0 {
+            0
+        } else if next_val == 1 {
+            0
+        } else {
+            (next_val as usize).saturating_sub(freed_count)
+        }
+    }
+
+    /// Get the number of freed user_data values available for reuse
+    #[must_use]
+    pub fn available_user_data_count(&self) -> usize {
+        self.free_user_data.borrow().len()
+    }
+
+    // Multi-shot operation support
+
+    /// Check if a CQE has the IORING_CQE_F_MORE flag set
+    ///
+    /// This flag indicates that the operation is a multi-shot operation
+    /// and more completions will be generated for this operation.
+    #[must_use]
+    pub fn cqe_has_more(&self, cqe: &crate::io_uring_cqe) -> bool {
+        cqe.flags & crate::IORING_CQE_F_MORE != 0
+    }
+
+    /// Check if a CQE has any flags set
+    #[must_use]
+    pub fn cqe_has_flags(&self, cqe: &crate::io_uring_cqe, flags: u32) -> bool {
+        cqe.flags & flags != 0
+    }
+
+    /// Get all flags from a CQE
+    #[must_use]
+    pub fn cqe_get_flags(&self, cqe: &crate::io_uring_cqe) -> u32 {
+        cqe.flags
+    }
+
+    /// Setup a multi-shot poll operation
+    ///
+    /// Multi-shot operations generate multiple CQEs without resubmission.
+    /// The operation continues until explicitly cancelled.
+    #[must_use]
+    pub fn poll_add_multishot(&mut self, fd: i32, events: u16) -> Option<&mut io_uring_sqe> {
+        let sqe = self.get_sqe()?;
+        crate::sqe::PollAdd::new(fd, events).prep(sqe);
+        // Multi-shot poll requires IOSQE_ASYNC flag
+        sqe.flags |= crate::IOSQE_ASYNC;
+        Some(sqe)
+    }
+
+    /// Setup a multi-shot accept operation
+    ///
+    /// Multi-shot accept generates multiple CQEs for each incoming connection
+    /// without resubmission. The operation continues until explicitly cancelled.
+    #[must_use]
+    pub fn accept_multishot(&mut self, fd: i32, flags: i32) -> Option<&mut io_uring_sqe> {
+        let sqe = self.get_sqe()?;
+        crate::sqe::Accept::new(fd, flags | crate::SOCK_CLOEXEC).prep(sqe);
+        // Multi-shot accept requires IOSQE_ASYNC flag
+        sqe.flags |= crate::IOSQE_ASYNC;
+        Some(sqe)
+    }
+
+    /// Cancel a multi-shot operation
+    ///
+    /// Cancels a multi-shot operation identified by its user_data.
+    /// After cancellation, a final CQE will be generated.
+    pub fn cancel_multishot(&mut self, user_data: u64) -> Option<&mut io_uring_sqe> {
+        self.prepare(&crate::sqe::AsyncCancel::new(user_data, 0))
     }
 
     #[doc = "Submit all pending SQEs to the kernel."]
