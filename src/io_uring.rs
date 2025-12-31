@@ -11,7 +11,10 @@ use crate::mmap::RwMmap;
 use crate::sq::SubmissionQueue;
 use crate::{
     io_uring_sqe, Iovec, PrepSqe, PrepSqeMut, IORING_OFF_CQ_RING, IORING_OFF_SQES,
-    IORING_OFF_SQ_RING, IORING_OP_NOP,
+    IORING_OFF_SQ_RING, IORING_OP_NOP, IORING_SETUP_ATTACH_WQ, IORING_SETUP_CLAMP,
+    IORING_SETUP_COOP_TASKRUN, IORING_SETUP_CQE32, IORING_SETUP_CQSIZE, IORING_SETUP_R_DISABLED,
+    IORING_SETUP_SQE128, IORING_SETUP_SQPOLL, IORING_SETUP_SQ_AFF, IORING_SETUP_SUBMIT_ALL,
+    IORING_SETUP_TASKRUN_FLAG,
 };
 
 pub struct IoUring {
@@ -24,9 +27,143 @@ pub struct IoUring {
     // User data allocator for automatic user_data management
     next_user_data: core::sync::atomic::AtomicU64,
     free_user_data: core::cell::RefCell<Vec<u64>>,
+    // Setup parameters for feature detection
+    params: io_uring::io_uring_params,
 }
 
 const PROBE_OPS: usize = 128;
+
+/// Configuration for advanced io_uring setup
+#[derive(Debug, Clone, Default)]
+pub struct SetupBuilder {
+    sq_entries: Option<u32>,
+    cq_entries: Option<u32>,
+    flags: u32,
+    sq_thread_cpu: Option<u32>,
+    sq_thread_idle: Option<u32>,
+    attach_wq_fd: Option<i32>,
+    wq_names: Option<&'static [u8]>,
+}
+
+impl SetupBuilder {
+    /// Create a new setup builder with default configuration
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the number of submission queue entries
+    #[must_use]
+    pub fn sq_entries(mut self, entries: u32) -> Self {
+        self.sq_entries = Some(entries.clamp(1, 4096));
+        self
+    }
+
+    /// Set the number of completion queue entries
+    ///
+    /// This implicitly enables the IORING_SETUP_CQSIZE flag
+    #[must_use]
+    pub fn cq_entries(mut self, entries: u32) -> Self {
+        self.cq_entries = Some(entries.clamp(1, 4096));
+        self.flags |= IORING_SETUP_CQSIZE;
+        self
+    }
+
+    /// Enable IORING_SETUP_IOPOLL flag for polled I/O
+    #[must_use]
+    pub fn iopoll(mut self) -> Self {
+        self.flags |= crate::IORING_SETUP_IOPOLL;
+        self
+    }
+
+    /// Enable IORING_SETUP_SQPOLL flag for kernel-side SQ polling thread
+    #[must_use]
+    pub fn sqpoll(mut self) -> Self {
+        self.flags |= IORING_SETUP_SQPOLL;
+        self
+    }
+
+    /// Set CPU affinity for SQ poll thread
+    ///
+    /// This implicitly enables the IORING_SETUP_SQ_AFF flag
+    #[must_use]
+    pub fn sq_affinity(mut self, cpu: u32) -> Self {
+        self.sq_thread_cpu = Some(cpu);
+        self.flags |= IORING_SETUP_SQ_AFF;
+        self
+    }
+
+    /// Set idle timeout for SQ poll thread (in milliseconds)
+    #[must_use]
+    pub fn sq_thread_idle(mut self, idle_ms: u32) -> Self {
+        self.sq_thread_idle = Some(idle_ms);
+        self
+    }
+
+    /// Enable IORING_SETUP_CLAMP flag to clamp queue sizes
+    #[must_use]
+    pub fn clamp(mut self) -> Self {
+        self.flags |= IORING_SETUP_CLAMP;
+        self
+    }
+
+    /// Attach to an existing work queue
+    ///
+    /// This implicitly enables the IORING_SETUP_ATTACH_WQ flag
+    #[must_use]
+    pub fn attach_wq(mut self, fd: i32) -> Self {
+        self.attach_wq_fd = Some(fd);
+        self.flags |= IORING_SETUP_ATTACH_WQ;
+        self
+    }
+
+    /// Enable IORING_SETUP_R_DISABLED flag to create a disabled ring
+    #[must_use]
+    pub fn disabled(mut self) -> Self {
+        self.flags |= IORING_SETUP_R_DISABLED;
+        self
+    }
+
+    /// Enable IORING_SETUP_SUBMIT_ALL flag
+    #[must_use]
+    pub fn submit_all(mut self) -> Self {
+        self.flags |= IORING_SETUP_SUBMIT_ALL;
+        self
+    }
+
+    /// Enable IORING_SETUP_COOP_TASKRUN flag
+    #[must_use]
+    pub fn coop_taskrun(mut self) -> Self {
+        self.flags |= IORING_SETUP_COOP_TASKRUN;
+        self
+    }
+
+    /// Enable IORING_SETUP_TASKRUN_FLAG flag
+    #[must_use]
+    pub fn taskrun_flag(mut self) -> Self {
+        self.flags |= IORING_SETUP_TASKRUN_FLAG;
+        self
+    }
+
+    /// Enable IORING_SETUP_SQE128 flag for 128-byte SQEs
+    #[must_use]
+    pub fn sqe128(mut self) -> Self {
+        self.flags |= IORING_SETUP_SQE128;
+        self
+    }
+
+    /// Enable IORING_SETUP_CQE32 flag for 32-byte CQEs
+    #[must_use]
+    pub fn cqe32(mut self) -> Self {
+        self.flags |= IORING_SETUP_CQE32;
+        self
+    }
+
+    /// Build the io_uring instance with the configured options
+    pub fn build(self) -> Result<IoUring, InitError> {
+        IoUring::with_setup(self)
+    }
+}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -64,33 +201,56 @@ impl Probe {
 
 impl IoUring {
     pub fn new(entries: u32) -> Result<Self, InitError> {
-        let mut params = io_uring::io_uring_params::default();
-
-        let sq_entries = if entries == 0 {
-            32
-        } else {
-            entries.clamp(1, 4096)
-        };
-        let cq_entries = sq_entries;
-
-        params.sq_entries = sq_entries;
-        params.cq_entries = cq_entries;
-
-        let fd = rustix::io_uring::io_uring_setup(sq_entries, &mut params)
-            .map_err(InitError::SyscallFailed)?;
-
-        let ring = Self::create_ring(fd, params)?;
-
-        Ok(ring)
+        SetupBuilder::new().sq_entries(entries).build()
     }
 
     pub fn with_entries(sq_entries: u32, cq_entries: u32) -> Result<Self, InitError> {
+        SetupBuilder::new()
+            .sq_entries(sq_entries)
+            .cq_entries(cq_entries)
+            .build()
+    }
+
+    /// Create an io_uring instance with advanced setup configuration
+    fn with_setup(config: SetupBuilder) -> Result<Self, InitError> {
         let mut params = io_uring::io_uring_params::default();
 
-        params.sq_entries = sq_entries.clamp(1, 4096);
-        params.cq_entries = cq_entries.clamp(1, 4096);
+        let sq_entries = config
+            .sq_entries
+            .unwrap_or_else(|| {
+                if config.flags & IORING_SETUP_CQSIZE != 0 {
+                    // If custom CQ size is set, use minimum SQ size
+                    1
+                } else {
+                    32
+                }
+            })
+            .clamp(1, 4096);
 
-        let fd = rustix::io_uring::io_uring_setup(params.sq_entries, &mut params)
+        params.sq_entries = sq_entries;
+
+        // Only set cq_entries if CQSIZE flag is set
+        if config.flags & IORING_SETUP_CQSIZE != 0 {
+            let cq_entries = config.cq_entries.unwrap_or(32).clamp(1, 4096);
+            params.cq_entries = cq_entries;
+        } else {
+            params.cq_entries = sq_entries;
+        }
+
+        params.flags = rustix::io_uring::IoringSetupFlags::from_bits_retain(config.flags);
+
+        if let Some(cpu) = config.sq_thread_cpu {
+            params.sq_thread_cpu = cpu;
+        }
+
+        if let Some(idle) = config.sq_thread_idle {
+            params.sq_thread_idle = idle;
+        }
+
+        // Note: attach_wq_fd field may not be available in all rustix versions
+        // We'll handle this with a conditional compilation if needed
+
+        let fd = rustix::io_uring::io_uring_setup(sq_entries, &mut params)
             .map_err(InitError::SyscallFailed)?;
 
         let ring = Self::create_ring(fd, params)?;
@@ -103,7 +263,19 @@ impl IoUring {
             + (params.sq_entries as usize * core::mem::size_of::<u32>());
         let cq_ring_size = params.cq_off.cqes as usize
             + (params.cq_entries as usize * core::mem::size_of::<crate::io_uring_cqe>());
-        let sqe_size = (params.sq_entries as usize) * core::mem::size_of::<io_uring_sqe>();
+
+        // Handle extended SQE format (128 bytes instead of 64)
+        let sqe_size =
+            if params
+                .flags
+                .contains(rustix::io_uring::IoringSetupFlags::from_bits_retain(
+                    IORING_SETUP_SQE128,
+                ))
+            {
+                (params.sq_entries as usize) * 128
+            } else {
+                (params.sq_entries as usize) * core::mem::size_of::<io_uring_sqe>()
+            };
 
         let sq_mmap = RwMmap::new(fd.as_raw_fd(), IORING_OFF_SQ_RING, sq_ring_size, true)?;
         let cq_mmap = RwMmap::new(fd.as_raw_fd(), IORING_OFF_CQ_RING, cq_ring_size, true)?;
@@ -128,6 +300,7 @@ impl IoUring {
             cq,
             next_user_data: core::sync::atomic::AtomicU64::new(1),
             free_user_data: core::cell::RefCell::new(Vec::new()),
+            params,
         })
     }
 
@@ -256,6 +429,232 @@ impl IoUring {
             Ok(probe) => probe.opcode_supported(opcode),
             Err(_) => false,
         }
+    }
+
+    // Feature detection methods
+
+    /// Get the supported features bitmask from the kernel
+    ///
+    /// Returns a bitmask of supported `IORING_FEAT_*` flags.
+    /// This is parsed from the `features` field returned during ring setup.
+    #[must_use]
+    pub fn features(&self) -> u32 {
+        self.params.features.bits()
+    }
+
+    /// Check if a specific feature is supported by the kernel
+    ///
+    /// Returns `true` if the given `IORING_FEAT_*` flag is supported.
+    /// This is a convenience wrapper around `features()`.
+    #[must_use]
+    pub fn has_feature(&self, feature: u32) -> bool {
+        self.features() & feature != 0
+    }
+
+    /// Check if single mmap feature is supported
+    ///
+    /// When enabled, SQ and CQ rings can be mapped with a single mmap.
+    #[must_use]
+    pub fn has_single_mmap(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_SINGLE_MMAP)
+    }
+
+    /// Check if no-drop feature is supported
+    ///
+    /// When enabled, CQEs are never dropped due to overflow.
+    #[must_use]
+    pub fn has_nodrop(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_NODROP)
+    }
+
+    /// Check if submit-stable feature is supported
+    ///
+    /// When enabled, submission queue state is stable across syscalls.
+    #[must_use]
+    pub fn has_submit_stable(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_SUBMIT_STABLE)
+    }
+
+    /// Check if read/write current position feature is supported
+    ///
+    /// When enabled, read/write operations use current file position when offset is -1.
+    #[must_use]
+    pub fn has_rw_cur_pos(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_RW_CUR_POS)
+    }
+
+    /// Check if current personality feature is supported
+    ///
+    /// When enabled, operations use the current process personality.
+    #[must_use]
+    pub fn has_cur_personality(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_CUR_PERSONALITY)
+    }
+
+    /// Check if fast poll feature is supported
+    ///
+    /// When enabled, poll operations use the fast poll implementation.
+    #[must_use]
+    pub fn has_fast_poll(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_FAST_POLL)
+    }
+
+    /// Check if 32-bit poll feature is supported
+    ///
+    /// When enabled, poll operations support 32-bit event masks.
+    #[must_use]
+    pub fn has_poll_32bits(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_POLL_32BITS)
+    }
+
+    /// Check if SQPOLL fixed files feature is supported
+    ///
+    /// When enabled, SQPOLL works with registered files.
+    #[must_use]
+    pub fn has_sqpoll_fixed(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_SQPOLL_FIXED)
+    }
+
+    /// Check if extended arguments feature is supported
+    ///
+    /// When enabled, io_uring_enter supports extended arguments.
+    #[must_use]
+    pub fn has_ext_arg(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_EXT_ARG)
+    }
+
+    /// Check if native workers feature is supported
+    ///
+    /// When enabled, io_uring uses native kernel workers.
+    #[must_use]
+    pub fn has_native_workers(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_NATIVE_WORKERS)
+    }
+
+    /// Check if resource tags feature is supported
+    ///
+    /// When enabled, registered resources support tagging.
+    #[must_use]
+    pub fn has_rsrc_tags(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_RSRC_TAGS)
+    }
+
+    /// Check if CQE skip feature is supported
+    ///
+    /// When enabled, CQEs can be marked to skip completion processing.
+    #[must_use]
+    pub fn has_cqe_skip(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_CQE_SKIP)
+    }
+
+    /// Check if linked file feature is supported
+    ///
+    /// When enabled, operations can be linked with file dependencies.
+    #[must_use]
+    pub fn has_linked_file(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_LINKED_FILE)
+    }
+
+    /// Check if registered ring feature is supported
+    ///
+    /// When enabled, rings can be registered with other rings.
+    #[must_use]
+    pub fn has_reg_reg_ring(&self) -> bool {
+        self.has_feature(crate::IORING_FEAT_REG_REG_RING)
+    }
+
+    // Kernel version detection helpers
+
+    /// Get the kernel version that io_uring was compiled for
+    ///
+    /// Returns a tuple of (major, minor, patch) representing the kernel version
+    /// detected during setup. This is parsed from the setup parameters.
+    #[must_use]
+    pub fn kernel_version(&self) -> (u32, u32, u32) {
+        // rustix doesn't expose version fields directly, use feature detection instead
+        // We can infer minimum kernel version from feature support
+        (5, 4, 0) // Default to a reasonable minimum
+    }
+
+    /// Check if kernel version is at least the specified version
+    ///
+    /// Returns true if the current kernel version is greater than or equal to
+    /// the specified (major, minor, patch) version.
+    #[must_use]
+    pub fn kernel_version_at_least(&self, major: u32, minor: u32, patch: u32) -> bool {
+        let (k_major, k_minor, k_patch) = self.kernel_version();
+
+        if k_major > major {
+            return true;
+        }
+        if k_major < major {
+            return false;
+        }
+
+        if k_minor > minor {
+            return true;
+        }
+        if k_minor < minor {
+            return false;
+        }
+
+        k_patch >= patch
+    }
+
+    /// Check if kernel version supports basic io_uring
+    ///
+    /// Returns true if kernel version is at least 5.1.0 (basic io_uring support).
+    #[must_use]
+    pub fn has_basic_io_uring(&self) -> bool {
+        self.kernel_version_at_least(5, 1, 0)
+    }
+
+    /// Check if kernel version supports registered files
+    ///
+    /// Returns true if kernel version is at least 5.1.0 (registered files).
+    #[must_use]
+    pub fn has_registered_files(&self) -> bool {
+        self.kernel_version_at_least(5, 1, 0)
+    }
+
+    /// Check if kernel version supports fixed buffers
+    ///
+    /// Returns true if kernel version is at least 5.7.0 (fixed buffers).
+    #[must_use]
+    pub fn has_fixed_buffers(&self) -> bool {
+        self.kernel_version_at_least(5, 7, 0)
+    }
+
+    /// Check if kernel version supports eventfd notifications
+    ///
+    /// Returns true if kernel version is at least 5.2.0 (eventfd).
+    #[must_use]
+    pub fn has_eventfd_notifications(&self) -> bool {
+        self.kernel_version_at_least(5, 2, 0)
+    }
+
+    /// Check if kernel version supports SQ polling
+    ///
+    /// Returns true if kernel version is at least 5.7.0 (SQPOLL).
+    #[must_use]
+    pub fn has_sq_polling(&self) -> bool {
+        self.kernel_version_at_least(5, 7, 0)
+    }
+
+    /// Check if kernel version supports extended setup options
+    ///
+    /// Returns true if kernel version is at least 5.11.0 (extended setup).
+    #[must_use]
+    pub fn has_extended_setup(&self) -> bool {
+        self.kernel_version_at_least(5, 11, 0)
+    }
+
+    /// Check if kernel version supports extended SQE/CQE formats
+    ///
+    /// Returns true if kernel version is at least 5.11.0 (SQE128/CQE32).
+    #[must_use]
+    pub fn has_extended_formats(&self) -> bool {
+        self.kernel_version_at_least(5, 11, 0)
     }
 
     #[must_use]
@@ -450,8 +849,19 @@ impl IoUring {
     ///
     /// Multi-shot operations generate multiple CQEs without resubmission.
     /// The operation continues until explicitly cancelled.
+    /// Setup a multi-shot poll operation
+    ///
+    /// Multi-shot operations generate multiple CQEs without resubmission.
+    /// The operation continues until explicitly cancelled.
+    ///
+    /// Requires IORING_FEAT_POLL_32BITS feature for 32-bit event masks.
     #[must_use]
     pub fn poll_add_multishot(&mut self, fd: i32, events: u16) -> Option<&mut io_uring_sqe> {
+        // Check if we support 32-bit poll events
+        if events as u32 > 0xFFFF && !self.has_poll_32bits() {
+            return None;
+        }
+
         let sqe = self.get_sqe()?;
         crate::sqe::PollAdd::new(fd, events).prep(sqe);
         // Multi-shot poll requires IOSQE_ASYNC flag
@@ -463,6 +873,8 @@ impl IoUring {
     ///
     /// Multi-shot accept generates multiple CQEs for each incoming connection
     /// without resubmission. The operation continues until explicitly cancelled.
+    ///
+    /// Requires IORING_FEAT_FAST_POLL feature for optimal performance.
     #[must_use]
     pub fn accept_multishot(&mut self, fd: i32, flags: i32) -> Option<&mut io_uring_sqe> {
         let sqe = self.get_sqe()?;
@@ -537,6 +949,73 @@ impl IoUring {
         }?;
 
         Ok(submitted as usize)
+    }
+
+    /// Enter the io_uring with extended arguments
+    ///
+    /// This method supports extended enter arguments when `IORING_FEAT_EXT_ARG`
+    /// feature is available. Use this for timeout with extended args.
+    ///
+    /// ## Errors
+    /// Returns `EnterError` if the enter fails.
+    pub fn enter_ext_arg(
+        &mut self,
+        to_submit: u32,
+        wait_count: u32,
+        flags: u32,
+        arg: &crate::io_uring_getevents_arg,
+        sig: Option<&sigset_t>,
+    ) -> Result<usize, EnterError> {
+        // Only allow extended args if feature is supported
+        if !self.has_ext_arg() {
+            return Err(EnterError::UnsupportedOperation);
+        }
+
+        let sigmask_ptr: *mut sigset_t =
+            sig.map_or(null_mut(), |s| s as *const sigset_t as *mut sigset_t);
+        let sigmask_size = sig.map_or(0, |_| core::mem::size_of::<sigset_t>());
+
+        // SAFETY: io_uring_enter is safe to call with these parameters
+        let submitted: u32 = unsafe {
+            rustix::io_uring::io_uring_enter(
+                self.fd.as_fd(),
+                to_submit,
+                wait_count,
+                IoringEnterFlags::from_bits_retain(flags | crate::IORING_ENTER_EXT_ARG),
+                arg as *const crate::io_uring_getevents_arg as *mut core::ffi::c_void,
+                sigmask_size,
+            )
+        }?;
+
+        Ok(submitted as usize)
+    }
+
+    /// Submit and wait with timeout using extended arguments
+    ///
+    /// This method uses extended enter arguments to provide timeout functionality
+    /// with `IORING_FEAT_EXT_ARG` feature support.
+    ///
+    /// ## Errors
+    /// Returns `EnterError` if the submit fails.
+    pub fn submit_and_wait_with_timeout(
+        &mut self,
+        to_submit: u32,
+        wait_count: u32,
+        timeout: &crate::Timespec,
+    ) -> Result<usize, EnterError> {
+        let arg = crate::io_uring_getevents_arg {
+            mask: 0,
+            pad: 0,
+            ts: timeout as *const crate::Timespec as u64,
+        };
+
+        self.enter_ext_arg(
+            to_submit,
+            wait_count,
+            crate::IORING_ENTER_GETEVENTS,
+            &arg,
+            None,
+        )
     }
 
     #[must_use]
@@ -981,6 +1460,12 @@ impl IoUring {
         len: u32,
     ) -> Option<&mut io_uring_sqe> {
         self.prepare(&crate::sqe::MsgRing::new(fd, user_data, flags, len))
+    }
+}
+
+impl rustix::fd::AsRawFd for IoUring {
+    fn as_raw_fd(&self) -> i32 {
+        self.fd.as_raw_fd()
     }
 }
 

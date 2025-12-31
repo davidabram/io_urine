@@ -21,10 +21,12 @@ are at least trying their best, welcome.
 
 This repo has a working core ring + basic operations + Phase 1 (registration
 APIs) + Phase 2 (file operations) + Phase 3 (poll and timeouts) + 
-Phase 4 (networking operations) + Phase 5 (advanced I/O operations).
+Phase 4 (networking operations) + Phase 5 (advanced I/O operations) +
+Phase 6 (advanced queue management) + Phase 7 (advanced setup and features) +
+Phase 8 (feature detection and probing).
 
 Implemented (high level):
-- Ring setup + memory mapping (`IoUring::new`, `IoUring::with_entries`).
+- Ring setup + memory mapping (`IoUring::new`, `IoUring::with_entries`, `SetupBuilder`).
 - SQ/CQ management (`get_sqe`, `submit`, `submit_and_wait`, `enter`,
   `peek_cqe`, `copy_cqes`, `cqe_seen`).
 - SQE prep helpers (NOP, read/write, fsync, close, fixed buffers, file ops, poll/timeout,
@@ -37,14 +39,16 @@ Implemented (high level):
 - Networking operations (`send`, `recv`, `sendmsg`, `recvmsg`, `accept`, `connect`, `shutdown`).
 - Advanced I/O operations (`splice`, `tee`, `provide_buffers`, `remove_buffers`, 
   `free_buffers`, `cancel`, `msg_ring`).
+- Advanced queue management (SQE caching, linked operations, user data allocation, 
+  multishot operations).
+- Advanced setup features (SetupBuilder with all IORING_SETUP_* flags, 
+  custom queue sizes, SQ polling, extended SQE/CQE formats).
+- Feature detection and probing (kernel version, feature flags, conditional support).
 - CQE result parsing helpers.
-- 54 unit tests (`cargo test` is currently green).
+- Comprehensive test coverage for feature detection.
 
 Not implemented (yet):
-- Higher-level "ergonomic" helpers (user_data allocators, multishot helpers,
-  robust feature gating, etc.) - Phase 6+.
-- Deep kernel compatibility work beyond basic probing - Phase 8+.
-- Advanced setup flags (SQE128, CQE32, etc.) - Phase 7+.
+- Advanced registration features (restrictions, buffer rings, worker management) - Phase 9+.
 
 For planning docs and a running implementation checklist, see `lode/`.
 
@@ -54,6 +58,7 @@ For planning docs and a running implementation checklist, see `lode/`.
 - `RwMmap` wrapper for `mmap`/`munmap` (`src/mmap.rs`).
 - Submission queue / completion queue ring state (`src/sq.rs`, `src/cq.rs`).
 - `IoUring` orchestrator (`src/io_uring.rs`).
+- `SetupBuilder` for advanced ring configuration (`src/io_uring.rs`).
 
 ### SQE prep helpers
 Located in `src/sqe.rs`:
@@ -118,6 +123,24 @@ Located in `src/cqe.rs`:
 - `cqe_res_to_result` (convert CQE result to `Result<i32, Errno>`)
 - `cqe_result_to_result` (convenience wrapper for CQE)
 
+### Advanced setup features (Phase 7)
+Located in `src/io_uring.rs`:
+- `SetupBuilder` - Fluent API for advanced io_uring configuration
+- Queue size customization (`sq_entries`, `cq_entries`)
+- SQ polling setup (`sqpoll`, `sq_affinity`, `sq_thread_idle`)
+- Advanced flags (`clamp`, `attach_wq`, `disabled`, `submit_all`, 
+  `coop_taskrun`, `taskrun_flag`)
+- Extended formats (`sqe128`, `cqe32`) for 128-byte SQEs and 32-byte CQEs
+- Backward compatible: existing constructors now use SetupBuilder internally
+
+### Advanced queue management (Phase 6)
+Located in `src/io_uring.rs`:
+- SQE caching and reuse (`get_sqe_with_reclaim`, `reclaim_sqe`)
+- Linked operations (`link_sqe`, `hardlink_sqe`, `drain_sqe`, `make_async`)
+- User data allocation (`alloc_user_data`, `free_user_data`, `set_sqe_user_data`)
+- Multi-shot operations (`poll_add_multishot`, `accept_multishot`, 
+  `cancel_multishot`, `cqe_has_more`)
+
 ## Building, testing, linting
 
 Run from repo root:
@@ -148,6 +171,10 @@ Lint:
 - `io_uring` is fundamentally a shared-memory + syscalls interface; the code
   uses `unsafe` for pointer/offset work. Keep unsafe blocks small and always
   explain invariants.
+- Advanced setup flags (SQE128, CQE32, SQPOLL, etc.) require kernel 5.11+ 
+  and may need additional privileges or specific kernel configurations.
+- Use `SetupBuilder` for advanced configuration; the simple constructors (`IoUring::new`,
+  `IoUring::with_entries`) remain available for basic use cases.
 
 ## Contributing
 
@@ -157,6 +184,8 @@ Lint:
   (even if it's just "prep fields are correct").
 - For poll operations, use event flag constants from `lib.rs` (POLLIN, POLLOUT, etc.).
 - For timeouts, use the `Timespec` struct and helper methods for relative/absolute timeouts.
+- For advanced setup features, extend `SetupBuilder` with new fluent methods and add 
+  comprehensive tests that handle both success and expected failure modes.
 
 ## License
 

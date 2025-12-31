@@ -11,6 +11,7 @@ pub enum InitError {
 pub enum EnterError {
     SyscallFailed(rustix::io::Errno),
     BadOffset,
+    UnsupportedOperation,
 }
 
 pub type IoUringResult<T> = Result<T, InitError>;
@@ -34,6 +35,7 @@ impl core::fmt::Debug for EnterError {
         match self {
             Self::SyscallFailed(e) => write!(f, "SyscallFailed({e})"),
             Self::BadOffset => write!(f, "BadOffset"),
+            Self::UnsupportedOperation => write!(f, "UnsupportedOperation"),
         }
     }
 }

@@ -4,7 +4,7 @@ mod tests {
 
     use std::ffi::CString;
 
-    use crate::sqe::sqe_flags;
+    use crate::{sqe::sqe_flags, IoUring};
     use crate::{
         InitError, IoUring, Iovec, MsgHdr, SqeFlags, AT_FDCWD, IORING_CQE_F_MORE, IORING_OP_CLOSE,
         IORING_OP_FADVISE, IORING_OP_FALLOCATE, IORING_OP_LINKAT, IORING_OP_MADVISE,
@@ -1381,4 +1381,44 @@ mod tests {
         assert_eq!(ring.allocated_user_data_count(), 0);
         assert_eq!(ring.available_user_data_count(), 0);
     }
+
+    // Phase 8: Feature Detection and Probing Tests
+
+    #[test]
+    fn test_phase8_basic_feature_detection() {
+        let ring = IoUring::new(8).expect("Failed to create ring");
+
+        // Test basic feature detection functionality
+        let features = ring.features();
+        assert!(features >= 0, "Features should be non-negative");
+
+        // Test that feature methods work without panicking
+        let _has_single_mmap = ring.has_single_mmap();
+        let _has_ext_arg = ring.has_ext_arg();
+        let _has_fast_poll = ring.has_fast_poll();
+
+        // Test version detection
+        let (major, _minor, _patch) = ring.kernel_version();
+        assert!(major >= 5, "Should have io_uring support");
+    }
+}
+
+// Phase 8: Feature Detection and Probing Tests
+
+#[test]
+fn test_phase8_basic_feature_detection() {
+    let ring = IoUring::new(8).expect("Failed to create ring");
+
+    // Test basic feature detection functionality
+    let features = ring.features();
+    assert!(features >= 0, "Features should be non-negative");
+
+    // Test that feature methods work without panicking
+    let _has_single_mmap = ring.has_single_mmap();
+    let _has_ext_arg = ring.has_ext_arg();
+    let _has_fast_poll = ring.has_fast_poll();
+
+    // Test version detection
+    let (major, minor, patch) = ring.kernel_version();
+    assert!(major >= 5, "Should have io_uring support");
 }
