@@ -260,47 +260,47 @@ This document outlines the plan for implementing missing io_uring functionality.
 ### Tasks
 
 #### 5.1 Splice and Tee
-- [ ] Implement `IORING_OP_SPLICE` in `sqe.rs`
+- [x] Implement `IORING_OP_SPLICE` in `sqe.rs`
   - `Splice` struct with fd_in, off_in, fd_out, off_out, len, flags
   - Support SPLICE_F_* flags
-- [ ] Implement `IORING_OP_TEE` in `sqe.rs`
+- [x] Implement `IORING_OP_TEE` in `sqe.rs`
   - `Tee` struct with fd_in, fd_out, len, flags
-- [ ] Helper: `IoUring::splice(fd_in, off_in, fd_out, off_out, len, flags)` method
-- [ ] Helper: `IoUring::tee(fd_in, fd_out, len, flags)` method
-- [ ] Tests for splice and tee (use pipes)
+- [x] Helper: `IoUring::splice(fd_in, off_in, fd_out, off_out, len, flags)` method
+- [x] Helper: `IoUring::tee(fd_in, fd_out, len, flags)` method
+- [x] Tests for splice and tee (use pipes)
 
 #### 5.2 Buffer Management
-- [ ] Implement `IORING_OP_ALLOC_BUFFERS` in `sqe.rs`
-  - `AllocBuffers` struct with bgid, nr
-- [ ] Implement `IORING_OP_FREE_BUFFERS` in `sqe.rs`
-  - `FreeBuffers` struct with bgid, nr
-- [ ] Implement `IORING_OP_PROVIDE_BUFFERS` in `sqe.rs`
+- [x] Implement `IORING_OP_PROVIDE_BUFFERS` in `sqe.rs`
   - `ProvideBuffers` struct with addr, len, bgid, bid, nbufs
   - Support buffer ring
-- [ ] Implement `IORING_OP_REMOVE_BUFFERS` in `sqe.rs`
-  - `RemoveBuffers` struct with bgid
-- [ ] Helper methods for buffer management
-- [ ] Tests for buffer management
+- [x] Implement `IORING_OP_REMOVE_BUFFERS` in `sqe.rs`
+  - `RemoveBuffers` struct with bgid, nr
+- [x] Implement `IORING_OP_FREE_BUFFERS` in `sqe.rs`
+  - `FreeBuffers` struct with bgid
+- [x] Helper methods for buffer management
+- [x] Tests for buffer management
 
 #### 5.3 Cancel and Async Management
-- [ ] Implement `IORING_OP_ASYNC_CANCEL` in `sqe.rs`
+- [x] Implement `IORING_OP_ASYNC_CANCEL` in `sqe.rs`
   - `AsyncCancel` struct with user_data, flags
   - Support `IORING_ASYNC_CANCEL_*` flags
-- [ ] Helper: `IoUring::cancel(user_data)` method
-- [ ] Tests for async cancellation
+- [x] Helper: `IoUring::cancel(user_data)` method
+- [x] Tests for async cancellation
 
 #### 5.4 Ring Messaging
-- [ ] Implement `IORING_OP_MSG_RING` in `sqe.rs`
+- [x] Implement `IORING_OP_MSG_RING` in `sqe.rs`
   - `MsgRing` struct with fd, user_data, flags, len
   - Support `IORING_MSG_RING_*` flags
-- [ ] Helper: `IoUring::msg_ring(fd, user_data, flags, len)` method
-- [ ] Tests for ring-to-ring messaging
+- [x] Helper: `IoUring::msg_ring(fd, user_data, flags, len)` method
+- [x] Tests for ring-to-ring messaging
 
 ### Files to Modify/Create
 - `src/sqe.rs` - Advanced I/O structs
 - `src/lib.rs` - Add splice, buffer constants
 - `src/io_uring.rs` - Convenience methods
 - `src/tests.rs` - Advanced I/O tests
+
+**Phase 5 Status: ✅ COMPLETE - December 31, 2024**
 
 ### Deliverables
 - ✅ Splice and tee operations
@@ -605,8 +605,8 @@ This document outlines the plan for implementing missing io_uring functionality.
 ## MVP Definition
 
 **Minimum Viable Product** (usable for real applications):
-- ✅ Phases 1-4 complete
-- ✅ Basic testing
+- ✅ Phases 1-5 complete
+- ✅ Comprehensive testing
 - ✅ Core documentation
 
 This provides:

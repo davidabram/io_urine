@@ -20,27 +20,31 @@ are at least trying their best, welcome.
 ## Status
 
 This repo has a working core ring + basic operations + Phase 1 (registration
-APIs) + Phase 2 (file operations) + Phase 3 (poll and timeouts).
+APIs) + Phase 2 (file operations) + Phase 3 (poll and timeouts) + 
+Phase 4 (networking operations) + Phase 5 (advanced I/O operations).
 
 Implemented (high level):
 - Ring setup + memory mapping (`IoUring::new`, `IoUring::with_entries`).
 - SQ/CQ management (`get_sqe`, `submit`, `submit_and_wait`, `enter`,
   `peek_cqe`, `copy_cqes`, `cqe_seen`).
-- SQE prep helpers (NOP, read/write, fsync, close, fixed buffers, file ops, poll/timeout).
+- SQE prep helpers (NOP, read/write, fsync, close, fixed buffers, file ops, poll/timeout,
+  networking, advanced I/O).
 - `io_uring_register` wrappers for buffers/files/eventfd/probe.
 - File operations (`openat`, `statx`, `fallocate`, `fadvise`, `madvise`,
   `unlinkat`, `renameat`, `mkdirat`, `symlinkat`, `linkat`, `close_direct`).
 - Poll and timeout operations (`poll_add`, `poll_remove`, `timeout`, `timeout_relative`,
   `timeout_absolute`, `timeout_remove`, `link_timeout`).
+- Networking operations (`send`, `recv`, `sendmsg`, `recvmsg`, `accept`, `connect`, `shutdown`).
+- Advanced I/O operations (`splice`, `tee`, `provide_buffers`, `remove_buffers`, 
+  `free_buffers`, `cancel`, `msg_ring`).
 - CQE result parsing helpers.
-- 34 unit tests (`cargo test` is currently green).
+- 54 unit tests (`cargo test` is currently green).
 
 Not implemented (yet):
-- Networking operations (Phase 4) - Complete send/recv, message passing, and connection management
-- Advanced I/O (splice, tee, cancel, buffer rings, etc., Phases 5+).
 - Higher-level "ergonomic" helpers (user_data allocators, multishot helpers,
-  robust feature gating, etc.).
-- Deep kernel compatibility work beyond basic probing.
+  robust feature gating, etc.) - Phase 6+.
+- Deep kernel compatibility work beyond basic probing - Phase 8+.
+- Advanced setup flags (SQE128, CQE32, etc.) - Phase 7+.
 
 For planning docs and a running implementation checklist, see `lode/`.
 
