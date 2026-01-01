@@ -149,14 +149,10 @@ pub const IORING_F_REG_REG_RING: u32 = 1 << 12;
 pub const IORING_REGISTER_RESTRICTIONS: u32 = 1 << 0;
 pub const IORING_REGISTER_RESTRICTION_REGISTER_OP: u32 = 1 << 1;
 pub const IORING_REGISTER_RESTRICTION_SQE_FLAGS: u32 = 1 << 2;
-pub const IORING_REGISTER_RESTRICTION_SQE_FLAGS: u32 = 1 << 3;
 
 // Argument restriction flags
 pub const IORING_REGISTER_RESTRICTION_ARG: u32 = 1 << 10;
 pub const IORING_REGISTER_RESTRICTION_SQE_GROUP: u32 = 1 << 11;
-
-// Registered ring FD
-pub const IORING_ENTER_REGISTERED_FD: u32 = 1 << 21;
 
 // io_uring feature flags (IORING_FEAT_*)
 pub const IORING_FEAT_SINGLE_MMAP: u32 = 1 << 0;
